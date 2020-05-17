@@ -18,3 +18,12 @@ def test_get_headers(future):
     headers = request.headers()
     assert headers is not None
 
+def test_get_http_version(future):
+
+    request = aioweb.request.HTTPToolsRequest(future)
+    version = request.http_version()
+    assert version == "1.1"
+
+    request = aioweb.request.HTTPToolsRequest(future, http_version="1.0")
+    version = request.http_version()
+    assert version == "1.0"

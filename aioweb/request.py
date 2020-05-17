@@ -24,15 +24,32 @@ class Request: # pylint: disable=too-few-public-methods
         Return a dictionary containing the headers as a dictionary
         """
 
+    @abc.abstractmethod
+    def http_version(self) -> str:
+        """
+        Return the HTTP version as a string
+        """
+
+    @abc.abstractmethod
+    def keep_alive(self) -> bool:
+        """
+        Return true if we want to keep the connection open
+        """
+
 
 class HTTPToolsRequest(Request):
     """
     An implementation of the abstract Request class using the HttpTools library
     """
 
-    def __init__(self, future: asyncio.Future, headers: dict = None) -> None:
+    def __init__(self, future: asyncio.Future,
+                 headers: dict = None,
+                 http_version: str = "1.1",
+                 keep_alive: bool = True) -> None:
         self._future = future
         self._headers = headers
+        self._http_version = http_version
+        self._keep_alive = keep_alive
 
     async def body(self) -> bytes:
         return await self._future
@@ -41,4 +58,9 @@ class HTTPToolsRequest(Request):
         if self._headers is None:
             return {}
         return self._headers
-    
+
+    def http_version(self) -> str:
+        return self._http_version
+
+    def keep_alive(self) -> bool:
+        return self._keep_alive

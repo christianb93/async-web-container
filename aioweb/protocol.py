@@ -90,7 +90,7 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
         """
         return self._state
 
-    async def _handle_requests(self):
+    async def _handle_requests(self): # pylint: disable=too-many-branches
         #
         # This handler needs to remain open for the entire
         # duration of the connection
@@ -142,8 +142,38 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
             if msg is not None:
                 logger.error("Have message %s from previous error", msg)
                 response = bytes(msg, "utf-8")
+                status_code = 500
+            else:
+                status_code = 200
 
-            print(response)
+            http_version = request.http_version()
+            keep_alive = request.keep_alive()
+
+            content_length = len(response)
+            response_bytes = b''.join([
+                bytes("HTTP/%s %s OK\r\n" % (http_version, status_code), "utf-8"),
+                b'Content-Type: text/plain; charset=utf-8\r\n',
+                bytes("Content-Length: %d\r\n" % content_length, "utf-8"),
+                b'\r\n',
+                response
+                ])
+            logger.debug("Writing %s", response_bytes.decode("utf-8"))
+            if self._transport is None:
+                logger.error("Lost transport")
+                return
+            if self._transport.is_closing():
+                logger.error("Cannot write into closing transport")
+                return
+            try:
+                self._transport.write(response_bytes)
+                #
+                # Close transport if needed
+                #
+                if not keep_alive:
+                    self._transport.close()
+            except BaseException as exc: # pylint: disable=broad-except
+                logger.error("Got unexpected error (type=%s, msg=%s", type(exc), exc)
+
         return
 
 
@@ -291,7 +321,9 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
         #
         if self._future:
             self._request_future = asyncio.Future()
-            request = aioweb.request.HTTPToolsRequest(self._request_future, self.get_headers())
+            request = aioweb.request.HTTPToolsRequest(future=self._request_future,
+                                                      headers=self.get_headers(),
+                                                      http_version=self._parser.get_http_version())
             self._future.set_result(request)
         else:
             logger.error("Could not find future for completed header")

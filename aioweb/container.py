@@ -44,6 +44,13 @@ class WebContainer:
         Stop the container.
         """
 
+    @abc.abstractmethod
+    async def handle_request(self, request: aioweb.request.Request):
+        """
+        Handle a single request. This method will usually delegate to the
+        user provided handler
+        """
+
 Handler = Callable[[aioweb.request.Request, WebContainer], Awaitable[bytes]]
 
 class HttpToolsWebContainer(WebContainer):
@@ -53,7 +60,9 @@ class HttpToolsWebContainer(WebContainer):
     """
 
     def __init__(self, host: str, port: str, handler: Handler) -> None:
-        pass
+        self._host = host
+        self._port = port
+        self._handler = handler
 
     async def start(self):
         pass
@@ -63,3 +72,6 @@ class HttpToolsWebContainer(WebContainer):
 
     def create_exception(self, msg: str):
         return None
+
+    async def handle_request(self, request: aioweb.request.Request):
+        return await self._handler(request, self)

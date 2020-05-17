@@ -4,13 +4,35 @@ import warnings
 import pytest
 import unittest.mock 
 
+import httptools
 
 import aioweb.protocol
+
+class ParserHelper:
+
+    def __init__(self):
+        self._headers = None
+        self._body = None
+
+    def on_body(self, data):
+        if self._body is None:
+            self._body = bytearray()
+        self._body.extend(data)
 
 class DummyTransport:
 
     def __init__(self):
-        pass
+        self._data = b""
+        self._is_closing = False
+
+    def write(self, data):
+        self._data = data
+
+    def is_closing(self):
+        return self._is_closing
+
+    def close(self):
+        self._is_closing = True
 
 class DummyContainer:
 
@@ -237,6 +259,7 @@ X'''
     assert isinstance(headers, dict)
     assert "Host" in headers
     assert headers["Host"] == b"example.com"
+    assert request.http_version() == "1.1"
     #
     # Now try to wait for the body
     #
@@ -257,3 +280,22 @@ X'''
     #
     body = future.result()
     assert body == b"XYZ"
+    #
+    # Verify that we have written back something into the transport
+    #
+    assert len(transport._data) > 0
+    #
+    # Now let us try to parse the response data
+    #
+    parser_helper = ParserHelper()
+    parser = httptools.HttpResponseParser(parser_helper)
+    parser.feed_data(transport._data)
+    #
+    # If we get to this point, this is a valid HTTP response
+    #
+    assert parser.get_status_code() == 200
+    assert parser_helper._body == b"abc"
+    #
+    # Finally check that the transport is not closed
+    #
+    assert not transport._is_closing
