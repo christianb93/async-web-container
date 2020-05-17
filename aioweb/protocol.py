@@ -5,12 +5,30 @@ processing flow of a request
 
 import asyncio
 import logging
+from enum import Enum
+
+import httptools
 
 import aioweb.container
 
 logger = logging.Logger(__name__)
 
-class HttpProtocol(asyncio.Protocol):
+class ConnectionState(Enum):
+    """
+    This encodes the state of a connection.
+    CLOSED - closed
+    HEADER - we have received a first part of the header
+    BODY - we have received the complete header
+    PENDING - waiting for the next message
+    """
+    CLOSED = 0              # Closed
+    HEADER = 1              # We have received a first part of the header
+    BODY = 2                # We have received the complete header
+    PENDING = 3             # Waiting for the next message
+
+
+
+class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attributes
 
     """
     A protocol used by our container class. When a connection is made, this protocol
@@ -31,6 +49,9 @@ class HttpProtocol(asyncio.Protocol):
         self._current_task = None
         self._timeout_seconds = timeout_seconds
         self._timeout_handler = None
+        self._parser = None
+        self._state = ConnectionState.CLOSED
+        self._headers = {}
 
     def connection_made(self, transport):
         self._transport = transport
@@ -49,6 +70,13 @@ class HttpProtocol(asyncio.Protocol):
         #
         logger.debug("Scheduling timeout")
         self._timeout_handler = self._loop.call_later(self._timeout_seconds, self._do_timeout)
+        self._state = ConnectionState.PENDING
+
+    def get_state(self):
+        """
+        Return the current state of the connection
+        """
+        return self._state
 
     async def _handle_requests(self):
         pass
@@ -58,7 +86,8 @@ class HttpProtocol(asyncio.Protocol):
     #
     def _do_timeout(self):
         #
-        # If the coroutine is waiting for a future, raise a timeout error
+        # If the coroutine is waiting for a future, throw a timeout error into
+        # the future
         #
         logger.debug("Timeout fired")
         if self._future is not None:
@@ -97,3 +126,61 @@ class HttpProtocol(asyncio.Protocol):
             logger.debug("Cancelling timeout handler")
             self._timeout_handler.cancel()
             self._timeout_handler = None
+        self._state = ConnectionState.CLOSED
+
+    def data_received(self, data: bytes):
+        """
+        This is called by the transport if new data arrives
+        """
+        #
+        # If we do not yet have a parser, create one
+        #
+        if self._parser is None:
+            self._parser = httptools.HttpRequestParser(self) # pylint: disable=no-member
+        #
+        # If we were pending before, i.e. this is the first piece of a new request,
+        # advance the status
+        #
+        if self._state == ConnectionState.PENDING:
+            self._state = ConnectionState.HEADER
+        #
+        # Feed data into parser, which might eventually trigger callbacks
+        # or raise exceptions if the data is not valid
+        #
+        self._parser.feed_data(data)
+        #
+        # If we have a running timeout, reschedule it. This is not awfully
+        # efficient, we could also let it expire and reschedule only then...
+        #
+        if self._timeout_handler is not None:
+            logger.debug("Resetting timeout")
+            self._timeout_handler.cancel()
+            self._timeout_handler = self._loop.call_later(self._timeout_seconds, self._do_timeout)
+
+    def on_message_complete(self):
+        """
+        This callback is invoked by the parser when the message is done.
+        """
+        #
+        # Reset parser
+        #
+        self._parser = None
+        self._state = ConnectionState.PENDING
+        self._headers = {}
+
+    def on_header(self, key, value):
+        """
+        Called by the parser when a header line is received, passing bytes
+        """
+        self._state = ConnectionState.HEADER
+        if key is not None:
+            key_str = key.decode("utf-8")
+            if len(key_str) > 0:
+                self._headers[key_str] = value
+
+    def get_headers(self) -> dict:
+        """
+        Return the currently collected headers as a dictionary. The keys are built assuming
+        UTF-8 encoding
+        """
+        return self._headers
