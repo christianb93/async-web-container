@@ -1,4 +1,5 @@
 import asyncio
+import warnings
 
 import pytest
 import unittest.mock 
@@ -41,13 +42,19 @@ def test_connection_lost(transport):
     with unittest.mock.patch("asyncio.create_task") as mock:
         protocol.connection_made(transport)
         #
+        # Get the coroutine handed over to the task and properly 
+        # close it
+        #
+        coro = mock.call_args.args[0]
+        print(coro)
+        coro.close()
+        #
         # Get the task that we returned
         #
         mocked_task = mock()
         #
         # Now call connection_lost 
         #
-        
         protocol.connection_lost(exc=None)
         #
         # this should have called cancel() on the task
