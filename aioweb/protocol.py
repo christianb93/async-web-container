@@ -10,6 +10,8 @@ from enum import Enum
 import httptools
 
 import aioweb.container
+import aioweb.request
+import aioweb.exceptions
 
 logger = logging.Logger(__name__)
 
@@ -38,6 +40,10 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
     supplied handler.
     """
 
+    __slots__ = ['_loop', '_transport', '_future', '_container',
+                 '_current_task', '_timeout_seconds', '_timeout_handler',
+                 '_parser', '_state', '_headers', '_request_future', '_body']
+
     def __init__(self, container: aioweb.container.WebContainer,
                  loop=None, timeout_seconds: int = 5) -> None:
         if loop is None:
@@ -52,6 +58,8 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
         self._parser = None
         self._state = ConnectionState.CLOSED
         self._headers = {}
+        self._request_future = None
+        self._body = None
 
     def connection_made(self, transport):
         """
@@ -83,7 +91,61 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
         return self._state
 
     async def _handle_requests(self):
-        pass
+        #
+        # This handler needs to remain open for the entire
+        # duration of the connection
+        #
+        while True:
+            #
+            # Wait until the header is complete
+            #
+            try:
+                request = await self._future
+            except asyncio.exceptions.CancelledError:
+                #
+                # If the connection has been closed in the meantime (before we get scheduled again),
+                # the connection_list will have cancelled the tasks - raise it again so that the
+                # event loop marks the task as cancelled
+                #
+                raise asyncio.exceptions.CancelledError("Coroutine cancelled")
+            except asyncio.exceptions.TimeoutError:
+                #
+                # If we got a timeout error, close the connection and raise a CancelledError
+                # so that the event loop will mark the task as cancelled and not schedule it again
+                #
+                if self._transport is not None:
+                    self._transport.close()
+                raise asyncio.exceptions.CancelledError("Timeout received")
+            except BaseException as exc:
+                logger.error("Waiting for future resulted in error (type=%s, msg=%s)",
+                             type(exc), exc)
+                raise
+            #
+            # Renew future for next request
+            #
+            self._future = asyncio.Future()
+            #
+            # Asynchronously invoke container handler for this request
+            #
+            msg = None
+            try:
+                response = await self._container.handle_request(request)
+            except aioweb.exceptions.HTTPException:
+                msg = "Handler raised exception"
+            except asyncio.exceptions.CancelledError:
+                msg = "Task was cancelled, ignoring"
+            except asyncio.exceptions.TimeoutError:
+                msg = "Request timed out"
+            except BaseException as exc: # pylint: disable=broad-except
+                msg = "Unknown exception (type=%s, msg=%s) caught" % (type(exc), exc)
+
+            if msg is not None:
+                logger.error("Have message %s from previous error", msg)
+                response = bytes(msg, "utf-8")
+
+            print(response)
+        return
+
 
     #
     # This will be called by the event loop when a timeout is scheduled.
@@ -171,6 +233,24 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
         self._parser = None
         self._state = ConnectionState.PENDING
         self._headers = {}
+        self._future = None
+        #
+        # Place the current body in the request future
+        #
+        if self._request_future is None:
+            logger.error("Could not locate valid future for body completion")
+        else:
+            if self._body is None:
+                self._request_future.set_result(b"")
+            else:
+                self._request_future.set_result(self._body)
+        #
+        # Reset body and parser
+        #
+        self._body = None
+        self._parser = None
+        self._request_future = None
+
 
     def on_header(self, key, value):
         """
@@ -182,9 +262,37 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
             if len(key_str) > 0:
                 self._headers[key_str] = value
 
+    def on_body(self, data):
+        """
+        This method is called by the parser when a piece of the body comes in
+        We simply append the body part to the existing body data
+        """
+        if self._body is None:
+            self._body = bytearray()
+        self._body.extend(data)
+
+
     def get_headers(self) -> dict:
         """
         Return the currently collected headers as a dictionary. The keys are built assuming
         UTF-8 encoding
         """
         return self._headers
+
+    def on_headers_complete(self):
+        """
+        This is called by the parser when the headers are complete. Here we complete the future
+        on which the handler task is currently waiting
+        """
+        logger.debug("Header complete")
+        #
+        # Build a request object and release handler task to
+        # signal that a new header has arrived
+        #
+        if self._future:
+            self._request_future = asyncio.Future()
+            request = aioweb.request.HTTPToolsRequest(self._request_future, self.get_headers())
+            self._future.set_result(request)
+        else:
+            logger.error("Could not find future for completed header")
+        self._state = ConnectionState.BODY
