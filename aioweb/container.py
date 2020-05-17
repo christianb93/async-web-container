@@ -4,7 +4,15 @@ and invokes a user specific handler.
 """
 
 import abc
+from typing import Callable, Awaitable
 
+import aioweb.request
+
+#
+# Type alias for a request handler. A request handler accepts a request and a
+# reference to a container and returns an awaitable
+#
+Handler = Callable[[aioweb.request.Request, aioweb.container.WebContainer], Awaitable[bytes]]
 
 class WebContainer:
     """
@@ -20,10 +28,10 @@ class WebContainer:
     a reference to the container in which the handler executes. A handler can now do one of the
     following things. Either it returns a sequence of bytes, which will then be sent back as
     response with status code 200, or it creates an exception using the method create_exception
-    of the container and raises it, which will  return an error 500.
+    of the container and raises it, which will return an error 500.
     """
 
-    def __init__(self, host, port, handler):
+    def __init__(self, host: str, port: str, handler: Handler) -> None:
         pass
 
     @abc.abstractmethod
@@ -33,7 +41,7 @@ class WebContainer:
         """
 
     @abc.abstractmethod
-    def create_exception(self, msg):
+    def create_exception(self, msg: str):
         """
         Create an exception, using the string msg as message
         """
