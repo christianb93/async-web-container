@@ -29,7 +29,7 @@ class WebContainer:
 
 
     @abc.abstractmethod
-    async def start(self, timeout: int = 0):
+    async def start(self):
         """
         Start the container, i.e. start listening for requests.
         """
@@ -71,21 +71,16 @@ class HttpToolsWebContainer(WebContainer):
         self._stop = False
         self._server = False
 
-    async def start(self, timeout: int = 0):
+    async def start(self):
         loop = asyncio.get_running_loop()
         self._server = await loop.create_server(lambda: aioweb.protocol.HttpProtocol(self),
                                                 host=self._host,
                                                 port=self._port)
         await self._server.start_serving()
-        iterations = 0
         while not self._stop:
-            iterations += 1
-            if iterations > timeout:
-                if timeout > 0:
-                    break
             await asyncio.sleep(1)
-            self._server.close()
-            await self._server.wait_closed()
+        self._server.close()
+        await self._server.wait_closed()
 
     def stop(self):
         self._stop = True
@@ -94,4 +89,5 @@ class HttpToolsWebContainer(WebContainer):
         return aioweb.exceptions.HTTPException(msg)
 
     async def handle_request(self, request: aioweb.request.Request):
-        return await self._handler(request, self)
+        result = await self._handler(request, self)
+        return result

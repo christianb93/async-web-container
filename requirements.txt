@@ -4,3 +4,4 @@ httptools=0.1.1
 pylint
 pytest
 pytest-asyncio
+coverage

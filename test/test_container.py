@@ -3,6 +3,38 @@ import aioweb.container
 import pytest
 import requests
 import threading
+import time
+
+class SimpleClient:
+
+    def __init__(self):
+        self._text = None
+        self._status_code = None
+        self._request_done = False
+
+    def do_test(self):
+        #
+        # Give container some time to complete start up
+        #
+        time.sleep(0.5)
+        #
+        # run request
+        #
+        response = requests.get("http://127.0.0.1:8888")
+        assert response is not None
+        self._request_done = True
+        self._text = response.text
+        self._status_code =  response.status_code
+        response.close()
+
+
+@pytest.fixture
+def test_client():
+    simple_client = SimpleClient()
+    t = threading.Thread(target=simple_client.do_test)
+    t.daemon = True
+    t.start()
+    return simple_client
 
 def test_container_creation():
 
@@ -38,35 +70,22 @@ async def test_start_stop_container():
     await asyncio.gather(stop_container(), container.start())
 
 @pytest.mark.asyncio
-async def test_single_request():
+async def test_single_request(test_client):
 
     async def handler(request, container):
-        return b"abc"
+        return b"abcd"
 
     container = aioweb.container.HttpToolsWebContainer(host="127.0.0.1", port="8888", handler=handler)
 
     async def stop_container():
-        await asyncio.sleep(2)
+        while not test_client._request_done:
+            await asyncio.sleep(1)
         container.stop()
 
-
-    def do_test():
-        #
-        # Give container some time to complete start up
-        #
-        sleep(0.5)
-        #
-        # run request
-        #
-        response = requests.post("http://localhost:8888", data=b"111")
-        assert response.status_code == 200
-        assert response.text()=="abc"
-        assert response.encoding == "utf-8"
-
+    await asyncio.gather(stop_container(), container.start())
     #
-    # Start container and schedule actual test
+    # Check response
     #
-    thread = threading.Thread(target=do_test)
-    thread.start()
-    await asyncio.gather(container.start(), stop_container())
-    thread.join()
+    assert test_client._request_done 
+    assert test_client._status_code == 200
+    assert test_client._text == "abcd"
