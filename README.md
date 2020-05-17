@@ -19,3 +19,4 @@ from the top level directory of the repository. For unit tests, we use the Pytho
 python3 -m pytest
 ```
 
+To run linting and tests, you can also use the included Makefile and do `make` or `make all`. 
