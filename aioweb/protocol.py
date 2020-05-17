@@ -54,6 +54,10 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
         self._headers = {}
 
     def connection_made(self, transport):
+        """
+        This callback is invoked by the transport when a connection is established. It creates a task
+        which handles all future requests received via this connection
+        """
         self._transport = transport
         logger.debug("Connection started, transport is %s", self._transport)
         #
