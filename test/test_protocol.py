@@ -1,6 +1,8 @@
 import asyncio
 
 import pytest
+import unittest.mock 
+
 
 import aioweb.protocol
 
@@ -20,48 +22,38 @@ def test_protocol_creation(event_loop):
     assert isinstance(protocol, asyncio.Protocol)
     assert protocol.get_state() == aioweb.protocol.ConnectionState.CLOSED
 
-@pytest.mark.asyncio
-async def test_connection_made(transport):
+def test_connection_made(transport):
     protocol = aioweb.protocol.HttpProtocol(container=None)
-    task_count = len(asyncio.all_tasks())
-    protocol.connection_made(transport)
-    #
-    # Now verify that we have created an additional task
-    #
-    assert len(asyncio.all_tasks()) == (task_count + 1)
+    with unittest.mock.patch("asyncio.create_task") as mock:
+        protocol.connection_made(transport)
+        #
+        # Now verify that we have created an additional task
+        #
+        mock.assert_called_once()
     #
     # and check the state
     #
     assert protocol.get_state() == aioweb.protocol.ConnectionState.PENDING
 
-@pytest.mark.asyncio
-async def test_connection_lost(transport):
+
+def test_connection_lost(transport):
     protocol = aioweb.protocol.HttpProtocol(container=None)
-    task_count = len(asyncio.all_tasks())
-    protocol.connection_made(transport)
-    #
-    # Now verify that we have created an additional task
-    #
-    assert len(asyncio.all_tasks()) == (task_count + 1)   
-    #
-    # Call connection_lost
-    #
-    protocol.connection_lost(exc=None)
-    #
-    # Now we iterate through the tasks and check
-    # whether cancelled was called on exactly one
-    # of them. WARNING: this will break if later versions
-    # of asyncio drop the _must_cancel field in the task
-    #
-    cancelling = 0
-    for task in asyncio.all_tasks():
-        if task._must_cancel:
-            cancelling +=1
-    assert cancelling == 1
-    #
-    # and check the state
-    #
-    assert protocol.get_state() == aioweb.protocol.ConnectionState.CLOSED    
+    with unittest.mock.patch("asyncio.create_task") as mock:
+        protocol.connection_made(transport)
+        #
+        # Get the task that we returned
+        #
+        mocked_task = mock()
+        #
+        # Now call connection_lost 
+        #
+        
+        protocol.connection_lost(exc=None)
+        #
+        # this should have called cancel() on the task
+        #
+        mocked_task.cancel.assert_called()
+
 
 @pytest.mark.asyncio
 async def test_data_received(transport):
@@ -91,3 +83,4 @@ Test: x
     assert protocol.get_state() == aioweb.protocol.ConnectionState.HEADER
     assert "Host" in protocol.get_headers()
     assert protocol.get_headers()["Host"] == b"example.com"
+
