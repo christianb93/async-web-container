@@ -70,3 +70,30 @@ class HttpProtocol(asyncio.Protocol):
                 # Future already done, ignore this
                 #
                 pass
+
+    def connection_lost(self, exc):
+        """
+        This callback is invoked by the transport when the connection is lost
+        """
+        if exc:
+            #
+            # Either the peer closed the connection, or a protocol callback raised
+            # an error and the transport closed the connection
+            #
+            logger.error("Connection closed with message %s", exc)
+        logger.debug("Connection closed")
+        self._transport = None
+        if self._current_task is not None:
+            #
+            # Cancel the task. This will (in the next iteration of the loop) resume
+            # the task which is most likely waiting for a new message body and
+            # raise a CancelledError which we can pass to the event loop which will
+            # then mark the task as cancelled. This also avoids an error message in
+            # the tasks __del__ method during cleanup
+            #
+            self._current_task.cancel()
+            self._current_task = None
+        if self._timeout_handler is not None:
+            logger.debug("Cancelling timeout handler")
+            self._timeout_handler.cancel()
+            self._timeout_handler = None
