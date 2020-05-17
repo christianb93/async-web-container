@@ -9,8 +9,8 @@ from enum import Enum
 
 import httptools
 
-import aioweb.container
 import aioweb.request
+import aioweb.container
 import aioweb.exceptions
 
 logger = logging.Logger(__name__)
