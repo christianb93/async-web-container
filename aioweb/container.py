@@ -8,12 +8,6 @@ from typing import Callable, Awaitable
 
 import aioweb.request
 
-#
-# Type alias for a request handler. A request handler accepts a request and a
-# reference to a container and returns an awaitable
-#
-Handler = Callable[[aioweb.request.Request, aioweb.container.WebContainer], Awaitable[bytes]]
-
 class WebContainer:
     """
     An abstract base class for a simple web container, based on the asyncio library.
@@ -31,8 +25,6 @@ class WebContainer:
     of the container and raises it, which will return an error 500.
     """
 
-    def __init__(self, host: str, port: str, handler: Handler) -> None:
-        pass
 
     @abc.abstractmethod
     async def start(self):
@@ -51,3 +43,23 @@ class WebContainer:
         """
         Stop the container.
         """
+
+Handler = Callable[[aioweb.request.Request, WebContainer], Awaitable[bytes]]
+
+class HttpToolsWebContainer(WebContainer):
+
+    """
+    An implementation of the abstract web container class
+    """
+
+    def __init__(self, host: str, port: str, handler: Handler) -> None:
+        pass
+
+    async def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+    def create_exception(self, msg: str):
+        return None
