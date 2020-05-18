@@ -24,8 +24,12 @@ class DummyTransport:
     def __init__(self):
         self._data = b""
         self._is_closing = False
+        self._fail_next = False
 
     def write(self, data):
+        if self._fail_next:
+            self._fail_next = False
+            raise BaseException()
         self._data = data
 
     def is_closing(self):
@@ -34,16 +38,28 @@ class DummyTransport:
     def close(self):
         self._is_closing = True
 
+    def fail_next(self):
+        self._fail_next = True
+
 class DummyContainer:
 
     def __init__(self):
         self._request = None 
         self._handle_request_called = False
+        self._exc = None
 
     async def handle_request(self, request):
         self._request = request
         self._handle_request_called = True 
+        if self._exc is not None:
+            exc = self._exc
+            self._exc = None
+            raise exc
         return b"abc"
+
+    def set_exception(self, exc):
+        self._exc = exc
+    
 
 @pytest.fixture
 def transport():
@@ -83,7 +99,6 @@ def test_connection_lost(transport):
         # close it
         #
         coro = mock.call_args.args[0]
-        print(coro)
         coro.close()
         #
         # Get the task that we returned
@@ -210,6 +225,34 @@ def test_headers_complete_task_timeout():
     # 
     transport.close.assert_called()
 
+
+#
+# Testcase: waiting for the future raises a base exception
+#
+def test_headers_complete_task_base_exception():
+    transport = unittest.mock.Mock()
+    protocol = aioweb.protocol.HttpProtocol(container=None)
+    with unittest.mock.patch("asyncio.create_task") as mock:
+        protocol.connection_made(transport)
+        coro = mock.call_args.args[0]
+    #
+    # When we now start our coroutine, it should wait for the message
+    # header, i.e. it should yield a Future
+    #
+    future = coro.send(None)
+    assert isinstance(future, asyncio.Future)
+    #
+    # Now throw a CancelledError into the coroutine and verify that it
+    # is re-raised
+    #
+    raised = 0
+    try:
+        coro.throw(BaseException())
+    except BaseException:
+        raised = 1
+    assert raised == 1
+
+
 #
 # We now simulate the full life cycle of a request
 #
@@ -299,3 +342,497 @@ X'''
     # Finally check that the transport is not closed
     #
     assert not transport._is_closing
+
+
+#
+# We now test some error cases, i.e. the case that the
+# user provided handler raises an exception
+#
+def test_user_handler_http_exception(transport, container):
+
+    protocol = aioweb.protocol.HttpProtocol(container=container)
+    with unittest.mock.patch("asyncio.create_task") as mock:
+        protocol.connection_made(transport)
+        coro = mock.call_args.args[0]
+    #
+    # When we now start our coroutine, it should wait for the message
+    # header, i.e. it should yield a Future
+    #
+    future = coro.send(None)
+    #
+    # Feed some data and complete the headers
+    #
+    request = b'''GET / HTTP/1.1
+Host: example.com
+Content-Length: 3
+
+XXX'''
+    protocol.data_received(request.replace(b'\n', b'\r\n'))
+    #
+    # Now the future should be completed
+    #
+    result = future.result()
+    assert result is not None
+    #
+    # When we now call send on the coroutine to simulate that the event
+    # loop reschedules it, it should invoke our handler function. We instruct
+    # our container to raise an exception
+    #
+    container.set_exception(aioweb.exceptions.HTTPException())
+    coro.send(None)
+    #
+    # Make sure that the handler has been called
+    #
+    assert container._request is not None
+    request = container._request
+    #
+    # Verify that we have written back something into the transport
+    #
+    assert len(transport._data) > 0
+    #
+    # Now let us try to parse the response data
+    #
+    parser_helper = ParserHelper()
+    parser = httptools.HttpResponseParser(parser_helper)
+    parser.feed_data(transport._data)
+    #
+    # If we get to this point, this is a valid HTTP response
+    # and we should see an error
+    #
+    assert parser.get_status_code() == 500
+
+def test_user_handler_cancelled_error(transport, container):
+
+    protocol = aioweb.protocol.HttpProtocol(container=container)
+    with unittest.mock.patch("asyncio.create_task") as mock:
+        protocol.connection_made(transport)
+        coro = mock.call_args.args[0]
+    #
+    # When we now start our coroutine, it should wait for the message
+    # header, i.e. it should yield a Future
+    #
+    future = coro.send(None)
+    #
+    # Feed some data and complete the headers
+    #
+    request = b'''GET / HTTP/1.1
+Host: example.com
+Content-Length: 3
+
+XXX'''
+    protocol.data_received(request.replace(b'\n', b'\r\n'))
+    #
+    # Now the future should be completed
+    #
+    result = future.result()
+    assert result is not None
+    #
+    # When we now call send on the coroutine to simulate that the event
+    # loop reschedules it, it should invoke our handler function. We instruct
+    # our container to raise an exception
+    #
+    container.set_exception(asyncio.exceptions.CancelledError())
+    coro.send(None)
+    #
+    # Make sure that the handler has been called
+    #
+    assert container._request is not None
+    request = container._request
+    #
+    # Verify that we have written back something into the transport
+    #
+    assert len(transport._data) > 0
+    #
+    # Now let us try to parse the response data
+    #
+    parser_helper = ParserHelper()
+    parser = httptools.HttpResponseParser(parser_helper)
+    parser.feed_data(transport._data)
+    #
+    # If we get to this point, this is a valid HTTP response
+    # and we should see an error
+    #
+    assert parser.get_status_code() == 500
+
+def test_user_handler_timeout_error(transport, container):
+
+    protocol = aioweb.protocol.HttpProtocol(container=container)
+    with unittest.mock.patch("asyncio.create_task") as mock:
+        protocol.connection_made(transport)
+        coro = mock.call_args.args[0]
+    #
+    # When we now start our coroutine, it should wait for the message
+    # header, i.e. it should yield a Future
+    #
+    future = coro.send(None)
+    #
+    # Feed some data and complete the headers
+    #
+    request = b'''GET / HTTP/1.1
+Host: example.com
+Content-Length: 3
+
+XXX'''
+    protocol.data_received(request.replace(b'\n', b'\r\n'))
+    #
+    # Now the future should be completed
+    #
+    result = future.result()
+    assert result is not None
+    #
+    # When we now call send on the coroutine to simulate that the event
+    # loop reschedules it, it should invoke our handler function. We instruct
+    # our container to raise an exception
+    #
+    container.set_exception(asyncio.exceptions.TimeoutError())
+    coro.send(None)
+    #
+    # Make sure that the handler has been called
+    #
+    assert container._request is not None
+    request = container._request
+    #
+    # Verify that we have written back something into the transport
+    #
+    assert len(transport._data) > 0
+    #
+    # Now let us try to parse the response data
+    #
+    parser_helper = ParserHelper()
+    parser = httptools.HttpResponseParser(parser_helper)
+    parser.feed_data(transport._data)
+    #
+    # If we get to this point, this is a valid HTTP response
+    # and we should see an error
+    #
+    assert parser.get_status_code() == 500
+
+def test_user_handler_base_exception(transport, container):
+
+    protocol = aioweb.protocol.HttpProtocol(container=container)
+    with unittest.mock.patch("asyncio.create_task") as mock:
+        protocol.connection_made(transport)
+        coro = mock.call_args.args[0]
+    #
+    # When we now start our coroutine, it should wait for the message
+    # header, i.e. it should yield a Future
+    #
+    future = coro.send(None)
+    #
+    # Feed some data and complete the headers
+    #
+    request = b'''GET / HTTP/1.1
+Host: example.com
+Content-Length: 3
+
+XXX'''
+    protocol.data_received(request.replace(b'\n', b'\r\n'))
+    #
+    # Now the future should be completed
+    #
+    result = future.result()
+    assert result is not None
+    #
+    # When we now call send on the coroutine to simulate that the event
+    # loop reschedules it, it should invoke our handler function. We instruct
+    # our container to raise an exception
+    #
+    container.set_exception(BaseException())
+    coro.send(None)
+    #
+    # Make sure that the handler has been called
+    #
+    assert container._request is not None
+    request = container._request
+    #
+    # Verify that we have written back something into the transport
+    #
+    assert len(transport._data) > 0
+    #
+    # Now let us try to parse the response data
+    #
+    parser_helper = ParserHelper()
+    parser = httptools.HttpResponseParser(parser_helper)
+    parser.feed_data(transport._data)
+    #
+    # If we get to this point, this is a valid HTTP response
+    # and we should see an error
+    #
+    assert parser.get_status_code() == 500
+
+def test_user_handler_transport_closing(transport, container):
+
+    protocol = aioweb.protocol.HttpProtocol(container=container)
+    with unittest.mock.patch("asyncio.create_task") as mock:
+        protocol.connection_made(transport)
+        coro = mock.call_args.args[0]
+    #
+    # When we now start our coroutine, it should wait for the message
+    # header, i.e. it should yield a Future
+    #
+    future = coro.send(None)
+    assert isinstance(future, asyncio.Future)
+    #
+    # Feed some data and complete the headers
+    #
+    request = b'''GET / HTTP/1.1
+Host: example.com
+Content-Length: 3
+
+XXX'''
+    protocol.data_received(request.replace(b'\n', b'\r\n'))
+    #
+    # When we now call send on the coroutine to simulate that the event
+    # loop reschedules it, it should invoke our handler function. Before
+    # we do this, we close the transport - this should stop the handler
+    #
+    transport.close()
+    try:
+        coro.send(None)
+    except StopIteration:
+        pass
+    else:
+        assert 1 == 0
+    #
+    # Make sure that the handler has been called
+    #
+    assert container._request is not None
+    request = container._request
+    #
+    # Verify that we have not written anything into the transport
+    #
+    assert len(transport._data) == 0
+
+def test_user_handler_transport_failed(transport, container):
+
+    protocol = aioweb.protocol.HttpProtocol(container=container)
+    with unittest.mock.patch("asyncio.create_task") as mock:
+        protocol.connection_made(transport)
+        coro = mock.call_args.args[0]
+    #
+    # When we now start our coroutine, it should wait for the message
+    # header, i.e. it should yield a Future
+    #
+    future = coro.send(None)
+    assert isinstance(future, asyncio.Future)
+    #
+    # Feed some data and complete the headers
+    #
+    request = b'''GET / HTTP/1.1
+Host: example.com
+Content-Length: 3
+
+XXX'''
+    protocol.data_received(request.replace(b'\n', b'\r\n'))
+    #
+    # When we now call send on the coroutine to simulate that the event
+    # loop reschedules it, it should invoke our handler function. Before
+    # we do this, we tell the dummy transport to fail on write
+    #
+    transport.fail_next()
+    coro.send(None)
+    #
+    # Make sure that the handler has been called
+    #
+    assert container._request is not None
+    request = container._request
+    #
+    # Verify that we have not written anything into the transport
+    #
+    assert len(transport._data) == 0
+
+
+#
+# We now use HTTP 1.0 and verify that we get the same version back
+# and do not use keep alive
+#
+def test_user_handler_http10(transport, container):
+
+    protocol = aioweb.protocol.HttpProtocol(container=container)
+    with unittest.mock.patch("asyncio.create_task") as mock:
+        protocol.connection_made(transport)
+        coro = mock.call_args.args[0]
+    #
+    # When we now start our coroutine, it should wait for the message
+    # header, i.e. it should yield a Future
+    #
+    future = coro.send(None)
+    assert isinstance(future, asyncio.Future)
+    #
+    # Feed some data 
+    #
+    request = b'''GET / HTTP/1.0
+Host: example.com
+Content-Length: 3
+
+123'''
+    protocol.data_received(request.replace(b'\n', b'\r\n'))
+    #
+    # Now the future should be completed
+    #
+    result = future.result()
+    assert result is not None
+    #
+    # When we now call send on the coroutine to simulate that the event
+    # loop reschedules it, it should invoke our handler function
+    #
+    coro.send(None)
+    #
+    # Make sure that the handler has been called
+    #
+    assert container._request is not None
+    #
+    # Verify some attributes of the request object
+    #
+    request = container._request
+    assert isinstance(request, aioweb.request.Request)
+    headers = request.headers()
+    assert headers is not None
+    assert isinstance(headers, dict)
+    assert "Host" in headers
+    assert headers["Host"] == b"example.com"
+    assert request.http_version() == "1.0"
+    assert not request.keep_alive() 
+    #
+    # Verify that we have written back something into the transport
+    #
+    assert len(transport._data) > 0
+    #
+    # Now let us try to parse the response data
+    #
+    parser_helper = ParserHelper()
+    parser = httptools.HttpResponseParser(parser_helper)
+    parser.feed_data(transport._data)
+    #
+    # If we get to this point, this is a valid HTTP response
+    #
+    assert parser.get_status_code() == 200
+    assert parser_helper._body == b"abc"
+    #
+    # Finally check that the transport is closed
+    #
+    assert transport._is_closing
+
+def test_timeout(transport):
+    loop = unittest.mock.Mock()
+    protocol = aioweb.protocol.HttpProtocol(container=None, loop=loop)
+    with unittest.mock.patch("asyncio.create_task") as mock:
+        protocol.connection_made(transport)
+        #
+        # Get the coroutine handed over to the task 
+        #
+        coro = mock.call_args.args[0]
+    #
+    # When we now start our coroutine, it should wait for the message
+    # header, i.e. it should yield a Future
+    #
+    future = coro.send(None)
+    assert isinstance(future, asyncio.Future)
+    #
+    # Check that we have scheduled a timeout
+    #
+    loop.call_later.assert_called()
+    _do_timeout = loop.call_later.call_args.args[1]
+    #
+    # Invoke the scheduled function - this should add an exception to the
+    # future the coroutine is waiting for
+    #
+    _do_timeout()
+    #
+    # now check that the future has an exception pending
+    #
+    try:
+        future.result()
+    except asyncio.exceptions.TimeoutError:
+        pass
+    else:
+        assert False # should not get here, as we except a TimeoutError        
+    coro.close()
+    
+def test_timeout_invalid_state(transport):
+    loop = unittest.mock.Mock()
+    protocol = aioweb.protocol.HttpProtocol(container=None, loop=loop)
+    with unittest.mock.patch("asyncio.create_task") as mock:
+        protocol.connection_made(transport)
+        #
+        # Get the coroutine handed over to the task 
+        #
+        coro = mock.call_args.args[0]
+    #
+    # When we now start our coroutine, it should wait for the message
+    # header, i.e. it should yield a Future
+    #
+    future = coro.send(None)
+    assert isinstance(future, asyncio.Future)
+    #
+    # Check that we have scheduled a timeout
+    #
+    loop.call_later.assert_called()
+    _do_timeout = loop.call_later.call_args.args[1]
+    #
+    # Invoke the scheduled function - this should add an exception to the
+    # future the coroutine is waiting for. But before doing this, set the 
+    # future to complete to produce an InvalidStateError
+    #
+    future.set_result(1)
+    _do_timeout()
+    coro.close()
+        
+
+def test_connection_lost_exc(transport):
+    loop = unittest.mock.Mock()
+    protocol = aioweb.protocol.HttpProtocol(container=None, loop=loop)
+    with unittest.mock.patch("asyncio.create_task") as mock:
+        protocol.connection_made(transport)
+        #
+        # Get the coroutine handed over to the task and properly 
+        # close it
+        #
+        coro = mock.call_args.args[0]
+        coro.close()
+        #
+        # Check that we have scheduled a timeout
+        #
+        loop.call_later.assert_called()
+        timeout_handler = loop.call_later()
+        #
+        # Get the task that we returned
+        #
+        mocked_task = mock()
+        #
+        # Now call connection_lost, and pass an exception
+        #
+        protocol.connection_lost(exc=BaseException())
+        #
+        # this should have called cancel() on the task
+        #
+        mocked_task.cancel.assert_called()
+        #
+        # and should have cancelled the timeout
+        #
+        timeout_handler.cancel.assert_called()
+
+#
+# Testcase: we receive message complete before the header is complete
+#
+def test_no_headers():
+    protocol = aioweb.protocol.HttpProtocol(container=container)
+    with unittest.mock.patch("asyncio.create_task") as mock:
+        protocol.connection_made(transport)
+        coro = mock.call_args.args[0]
+    #
+    # When we now start our coroutine, it should wait for the message
+    # header, i.e. it should yield a Future
+    #
+    future = coro.send(None)
+    assert isinstance(future, asyncio.Future)
+    #
+    # Instead of sending header, we now call message complete
+    # directly. This should never happen, but we should handle
+    # this gracefully
+    #
+    protocol.on_message_complete()
+    #
+    # Same thing for headers complete
+    #
+    protocol.on_headers_complete()

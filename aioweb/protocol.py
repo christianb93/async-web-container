@@ -65,6 +65,7 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
         """
         This callback is invoked by the transport when a connection is established. It
         creates a task which handles all future requests received via this connection
+        and schedules a timeout
         """
         self._transport = transport
         logger.debug("Connection started, transport is %s", self._transport)
@@ -158,9 +159,6 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
                 response
                 ])
             logger.debug("Writing %s", response_bytes.decode("utf-8"))
-            if self._transport is None:
-                logger.error("Lost transport")
-                return
             if self._transport.is_closing():
                 logger.error("Cannot write into closing transport")
                 return
@@ -174,7 +172,6 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
             except BaseException as exc: # pylint: disable=broad-except
                 logger.error("Got unexpected error (type=%s, msg=%s", type(exc), exc)
 
-        return
 
 
     #
@@ -198,7 +195,10 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
 
     def connection_lost(self, exc):
         """
-        This callback is invoked by the transport when the connection is lost
+        This callback is invoked by the transport when the connection is lost. Exceptions
+        passed will be ignored. The current task will be cancelled, and the state of the
+        connection will be set to closed. Any pending timeout handlers will be cancelled as
+        well.
         """
         if exc:
             #
@@ -323,7 +323,8 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
             self._request_future = asyncio.Future()
             request = aioweb.request.HTTPToolsRequest(future=self._request_future,
                                                       headers=self.get_headers(),
-                                                      http_version=self._parser.get_http_version())
+                                                      http_version=self._parser.get_http_version(),
+                                                      keep_alive=self._parser.should_keep_alive())
             self._future.set_result(request)
         else:
             logger.error("Could not find future for completed header")
