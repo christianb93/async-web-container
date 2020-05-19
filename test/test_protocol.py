@@ -343,6 +343,68 @@ X'''
     #
     assert not transport._is_closing
 
+def test_user_handler_second_call(transport, container):
+
+    protocol = aioweb.protocol.HttpProtocol(container=container)
+    with unittest.mock.patch("asyncio.create_task") as mock:
+        protocol.connection_made(transport)
+        coro = mock.call_args.args[0]
+    #
+    # We now go through the full cycle once to simulate the
+    # first request
+    #
+    future = coro.send(None)
+    request = b'''GET / HTTP/1.1
+Host: example.com
+Content-Length: 3
+
+ABC'''
+    protocol.data_received(request.replace(b'\n', b'\r\n'))
+    result = future.result()
+    #
+    # As the body is complete, the next simulated scheduling of the coroutine
+    # should make it run until it waits for the next request
+    #
+    future = coro.send(None)
+    assert container._request is not None
+    assert len(transport._data) > 0
+    parser_helper = ParserHelper()
+    parser = httptools.HttpResponseParser(parser_helper)
+    parser.feed_data(transport._data)
+    #
+    # If we get to this point, this is a valid HTTP response
+    #
+    assert parser.get_status_code() == 200
+    assert parser_helper._body == b"abc"
+    #
+    # Finally check that the transport is not closed
+    #
+    assert not transport._is_closing
+    #
+    # Now go through the cycle once more to simulate a second request coming in 
+    # via the same connection
+    #
+    request = b'''GET / HTTP/1.1
+Host: example.com
+Content-Length: 3
+
+ABC'''
+    container._request = None
+    transport._data = b""
+    protocol.data_received(request.replace(b'\n', b'\r\n'))
+    result = future.result()
+    coro.send(None)
+    assert container._request is not None
+    assert len(transport._data) > 0
+    parser_helper = ParserHelper()
+    parser = httptools.HttpResponseParser(parser_helper)
+    parser.feed_data(transport._data)
+    #
+    # Again, we should get a valid HTTP response
+    #
+    assert parser.get_status_code() == 200
+    assert parser_helper._body == b"abc"
+
 
 #
 # We now test some error cases, i.e. the case that the
