@@ -256,11 +256,13 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
     def _do_timeout(self):
         #
         # We set the current task to cancelled so that resuming the task will result
-        # in a CancelledError being raised
+        # in a CancelledError being raised, and close the transport
         #
         logger.debug("Timeout fired")
         if self._current_task is not None:
-            self._current_task.cancel("Task timed out")
+            self._current_task.cancel()
+            self._transport.close()
+            self._current_task = None
 
 
 

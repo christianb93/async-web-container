@@ -259,4 +259,11 @@ def test_timeout_fired(transport):
     # Now simulate that the timeout fires
     #
     timeout_method()
+    #
+    # Verify that the task is cancelled
+    #
     task.cancel.assert_called()
+    #
+    # and that the transport has been closed
+    #
+    assert transport._is_closing
