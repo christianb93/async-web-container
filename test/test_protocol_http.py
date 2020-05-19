@@ -70,61 +70,6 @@ def container():
     return DummyContainer()
 
 
-def test_protocol_creation(event_loop):
-
-    protocol = aioweb.protocol.HttpProtocol(container=None, loop=event_loop)
-    assert isinstance(protocol, asyncio.Protocol)
-    assert protocol.get_state() == aioweb.protocol.ConnectionState.CLOSED
-
-def test_connection_made(transport):
-    protocol = aioweb.protocol.HttpProtocol(container=None)
-    with unittest.mock.patch("asyncio.create_task") as mock:
-        protocol.connection_made(transport)
-        #
-        # Now verify that we have created an additional task
-        #
-        mock.assert_called_once()
-    #
-    # and check the state
-    #
-    assert protocol.get_state() == aioweb.protocol.ConnectionState.PENDING
-
-
-def test_connection_lost(transport):
-    protocol = aioweb.protocol.HttpProtocol(container=None)
-    with unittest.mock.patch("asyncio.create_task") as mock:
-        protocol.connection_made(transport)
-        #
-        # Get the coroutine handed over to the task and properly 
-        # close it
-        #
-        coro = mock.call_args.args[0]
-        coro.close()
-        #
-        # Get the task that we returned
-        #
-        mocked_task = mock()
-        #
-        # Now call connection_lost 
-        #
-        protocol.connection_lost(exc=None)
-        #
-        # this should have called cancel() on the task
-        #
-        mocked_task.cancel.assert_called()
-
-
-def test_data_received(transport):
-    protocol = aioweb.protocol.HttpProtocol(container=None)
-    with unittest.mock.patch("asyncio.create_task") as mock:
-        protocol.connection_made(transport)
-    #
-    # Feed some data. Here we only feed the first line, i.e. the message is not complete
-    # and there are no headers yet
-    #
-    request = b'GET / HTTP/1.1'
-    protocol.data_received(request)
-    assert protocol.get_state() == aioweb.protocol.ConnectionState.HEADER
 
 def test_header_received(transport):
     protocol = aioweb.protocol.HttpProtocol(container=None)
@@ -775,41 +720,6 @@ Content-Length: 3
     #
     assert transport._is_closing
 
-def test_timeout(transport):
-    loop = unittest.mock.Mock()
-    protocol = aioweb.protocol.HttpProtocol(container=None, loop=loop)
-    with unittest.mock.patch("asyncio.create_task") as mock:
-        protocol.connection_made(transport)
-        #
-        # Get the coroutine handed over to the task 
-        #
-        coro = mock.call_args.args[0]
-    #
-    # When we now start our coroutine, it should wait for the message
-    # header, i.e. it should yield a Future
-    #
-    future = coro.send(None)
-    assert isinstance(future, asyncio.Future)
-    #
-    # Check that we have scheduled a timeout
-    #
-    loop.call_later.assert_called()
-    _do_timeout = loop.call_later.call_args.args[1]
-    #
-    # Invoke the scheduled function - this should add an exception to the
-    # future the coroutine is waiting for
-    #
-    _do_timeout()
-    #
-    # now check that the future has an exception pending
-    #
-    try:
-        future.result()
-    except asyncio.exceptions.TimeoutError:
-        pass
-    else:
-        assert False # should not get here, as we except a TimeoutError        
-    coro.close()
     
 def test_timeout_invalid_state(transport):
     loop = unittest.mock.Mock()
@@ -841,38 +751,6 @@ def test_timeout_invalid_state(transport):
     coro.close()
         
 
-def test_connection_lost_exc(transport):
-    loop = unittest.mock.Mock()
-    protocol = aioweb.protocol.HttpProtocol(container=None, loop=loop)
-    with unittest.mock.patch("asyncio.create_task") as mock:
-        protocol.connection_made(transport)
-        #
-        # Get the coroutine handed over to the task and properly 
-        # close it
-        #
-        coro = mock.call_args.args[0]
-        coro.close()
-        #
-        # Check that we have scheduled a timeout
-        #
-        loop.call_later.assert_called()
-        timeout_handler = loop.call_later()
-        #
-        # Get the task that we returned
-        #
-        mocked_task = mock()
-        #
-        # Now call connection_lost, and pass an exception
-        #
-        protocol.connection_lost(exc=BaseException())
-        #
-        # this should have called cancel() on the task
-        #
-        mocked_task.cancel.assert_called()
-        #
-        # and should have cancelled the timeout
-        #
-        timeout_handler.cancel.assert_called()
 
 #
 # Testcase: we receive message complete before the header is complete

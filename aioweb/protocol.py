@@ -99,6 +99,75 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
         self._timeout_handler = self._loop.call_later(self._timeout_seconds, self._do_timeout)
         self._state = ConnectionState.PENDING
 
+    def connection_lost(self, exc):
+        """
+        Signal that a connection has been closed.
+
+        This callback is invoked by the transport when the connection is lost. Exceptions
+        passed will be ignored. The current task will be cancelled, and the state of the
+        connection will be set to closed. Any pending timeout handlers will be cancelled as
+        well.
+        """
+
+        if exc:
+            #
+            # Either the peer closed the connection, or a protocol callback raised
+            # an error and the transport closed the connection
+            #
+            logger.error("Connection closed with message %s", exc)
+        logger.debug("Connection closed")
+        self._transport = None
+        if self._current_task is not None:
+            #
+            # Cancel the task. This will (in the next iteration of the loop) resume
+            # the task which is most likely waiting for a new message body and
+            # raise a CancelledError which we can pass to the event loop which will
+            # then mark the task as cancelled. This also avoids an error message in
+            # the tasks __del__ method during cleanup
+            #
+            self._current_task.cancel()
+            self._current_task = None
+        if self._timeout_handler is not None:
+            logger.debug("Cancelling timeout handler")
+            self._timeout_handler.cancel()
+            self._timeout_handler = None
+        self._state = ConnectionState.CLOSED
+
+    def data_received(self, data: bytes):
+        """
+        Main entry point to hand over received data to the protocol.
+
+        This is called by the transport if new data arrives. If the state of the connection
+        is still pending, it will be set to HEADER. Then the data will be handed over to the
+        parser which potentially invokes further callbacks.
+        """
+
+        #
+        # If we do not yet have a parser, create one
+        #
+        if self._parser is None:
+            self._parser = httptools.HttpRequestParser(self) # pylint: disable=no-member
+        #
+        # If we were pending before, i.e. this is the first piece of a new request,
+        # advance the status
+        #
+        if self._state == ConnectionState.PENDING:
+            self._state = ConnectionState.HEADER
+        #
+        # Feed data into parser, which might eventually trigger callbacks
+        # or raise exceptions if the data is not valid
+        #
+        self._parser.feed_data(data)
+        #
+        # If we have a running timeout, reschedule it. This is not awfully
+        # efficient, we could also let it expire and reschedule only then...
+        #
+        if self._timeout_handler is not None:
+            logger.debug("Resetting timeout")
+            self._timeout_handler.cancel()
+            self._timeout_handler = self._loop.call_later(self._timeout_seconds, self._do_timeout)
+
+
     def get_state(self):
         """
         Return the current state of the connection
@@ -224,73 +293,7 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
                 #
                 pass
 
-    def connection_lost(self, exc):
-        """
-        Signal that a connection has been closed.
 
-        This callback is invoked by the transport when the connection is lost. Exceptions
-        passed will be ignored. The current task will be cancelled, and the state of the
-        connection will be set to closed. Any pending timeout handlers will be cancelled as
-        well.
-        """
-
-        if exc:
-            #
-            # Either the peer closed the connection, or a protocol callback raised
-            # an error and the transport closed the connection
-            #
-            logger.error("Connection closed with message %s", exc)
-        logger.debug("Connection closed")
-        self._transport = None
-        if self._current_task is not None:
-            #
-            # Cancel the task. This will (in the next iteration of the loop) resume
-            # the task which is most likely waiting for a new message body and
-            # raise a CancelledError which we can pass to the event loop which will
-            # then mark the task as cancelled. This also avoids an error message in
-            # the tasks __del__ method during cleanup
-            #
-            self._current_task.cancel()
-            self._current_task = None
-        if self._timeout_handler is not None:
-            logger.debug("Cancelling timeout handler")
-            self._timeout_handler.cancel()
-            self._timeout_handler = None
-        self._state = ConnectionState.CLOSED
-
-    def data_received(self, data: bytes):
-        """
-        Main entry point to hand over received data to the protocol.
-
-        This is called by the transport if new data arrives. If the state of the connection
-        is still pending, it will be set to HEADER. Then the data will be handed over to the
-        parser which potentially invokes further callbacks.
-        """
-
-        #
-        # If we do not yet have a parser, create one
-        #
-        if self._parser is None:
-            self._parser = httptools.HttpRequestParser(self) # pylint: disable=no-member
-        #
-        # If we were pending before, i.e. this is the first piece of a new request,
-        # advance the status
-        #
-        if self._state == ConnectionState.PENDING:
-            self._state = ConnectionState.HEADER
-        #
-        # Feed data into parser, which might eventually trigger callbacks
-        # or raise exceptions if the data is not valid
-        #
-        self._parser.feed_data(data)
-        #
-        # If we have a running timeout, reschedule it. This is not awfully
-        # efficient, we could also let it expire and reschedule only then...
-        #
-        if self._timeout_handler is not None:
-            logger.debug("Resetting timeout")
-            self._timeout_handler.cancel()
-            self._timeout_handler = self._loop.call_later(self._timeout_seconds, self._do_timeout)
 
     def on_message_complete(self):
         """
