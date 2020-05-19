@@ -1,0 +1,21 @@
+language: python
+python:
+  - "3.8"
+
+#
+# Install required dependencies
+#
+install:
+  - pip install -r requirements.txt
+
+
+#
+# Run linting
+#
+script:
+  - pylint aioweb
+#
+# Run tests
+#
+script:
+  - python -m pytest -v
