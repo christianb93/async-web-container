@@ -35,12 +35,12 @@ On my PC, this took only a bit more than 4 seconds, so that we achieve a rate of
 
 ## Limitations
 
-The HTTP container in this repository is far from completed, and important features that a mature container would have are missing. Just to list a few of them:
+The HTTP container in this repository is far from complete, and important features that a mature container would have are missing. Just to list a few of them:
 
 * compressed content is not supported
 * chunked transfer encoding is not supported
 * we only support HTTP 1.0 and HTTP 1.1
 * when using HTTP 1.0, keep-alive is not supported
-* a *aioweb.request.Requests* contains only a subset of what you might want to see, there is for instance no easy way to retriev method and URL (though this would be easy to add)
+* a *aioweb.request.Requests* contains only a subset of what you might want to see, there is for instance no easy way to retrieve method and URL (though this would be easy to add)
 * no HTTP conformance testing has been done
 
