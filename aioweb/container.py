@@ -13,6 +13,7 @@ import aioweb.request
 class WebContainer:
     """
     An abstract base class for a simple web container, based on the asyncio library.
+
     The container will accept incoming HTTP requests and, for each request, asynchronously invoke a
     user-specified handler as a separate task running inside the asyncio event loop.
 
@@ -26,7 +27,6 @@ class WebContainer:
     response with status code 200, or it creates an exception using the method create_exception
     of the container and raises it, which will return an error 500.
     """
-
 
     @abc.abstractmethod
     async def start(self):

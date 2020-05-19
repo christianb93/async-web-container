@@ -13,7 +13,7 @@ import aioweb.request
 import aioweb.container
 import aioweb.exceptions
 
-logger = logging.Logger(__name__)
+logger = logging.getLogger(__name__)
 
 class ConnectionState(Enum):
     """
@@ -187,6 +187,9 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
             #
             response_bytes = await self._get_response(request)
             logger.debug("Writing %s", response_bytes.decode("utf-8"))
+            #
+            # Deliver response
+            #
             if self._transport.is_closing():
                 logger.error("Cannot write into closing transport")
                 return

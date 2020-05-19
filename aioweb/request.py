@@ -6,7 +6,7 @@ import abc
 import asyncio
 
 
-class Request: # pylint: disable=too-few-public-methods
+class Request:
     """
     This class represents a HTTP request received by the container
     """
