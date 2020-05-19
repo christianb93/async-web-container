@@ -232,3 +232,31 @@ def test_data_received_second(transport):
         assert parser.feed_data.call_args.args[0] == b' HTTP/1.1'
         assert protocol.get_state() == aioweb.protocol.ConnectionState.HEADER
         
+
+#
+# Test the case that the timeout fires. This should cancel the 
+# current task
+#
+def test_timeout_fired(transport):
+    loop = unittest.mock.Mock()
+    protocol = aioweb.protocol.HttpProtocol(container=None, loop=loop)
+    with unittest.mock.patch("asyncio.create_task") as mock:
+        protocol.connection_made(transport)
+        #
+        # Check that we have scheduled a timeout
+        #
+        loop.call_later.assert_called()
+        timeout_handler = loop.call_later.return_value
+        timeout_seconds = loop.call_later.call_args.args[0]
+        timeout_method = loop.call_later.call_args.args[1]
+        #
+        # Get coroutine and task
+        #
+        task = mock.return_value
+        coro = mock.call_args.args[0]
+        coro.close()
+    #
+    # Now simulate that the timeout fires
+    #
+    timeout_method()
+    task.cancel.assert_called()
