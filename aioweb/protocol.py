@@ -40,7 +40,7 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
 
     When a connection is made, this protocol creates a task which handles all requests
     processed through this connection and is cancelled if the connection is closed. The task
-    will then wait until the header of the request has been parsed. 
+    will then wait until the header of the request has been parsed.
 
     Then, the handler attached to the container is invoked. This handler can either decide
     to wait for the request body or proceed. In any case, the handler is expected to return
@@ -174,7 +174,7 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
     #
     # Helper method to invoke the container handler and create a response
     #
-    async def _get_response(self, request: aioweb.request.HTTPToolsRequest) -> bytes:
+    async def _invoke_handler(self, request: aioweb.request.HTTPToolsRequest) -> bytes:
         assert isinstance(request, aioweb.request.HTTPToolsRequest)
         #
         # Asynchronously invoke container handler for this request
@@ -182,12 +182,8 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
         msg = None
         try:
             result = await self._container.handle_request(request)
-        except aioweb.exceptions.HTTPException:
-            msg = "Handler raised exception"
-        except asyncio.exceptions.CancelledError:
-            msg = "Task was cancelled, ignoring"
-        except asyncio.exceptions.TimeoutError:
-            msg = "Request timed out"
+        except aioweb.exceptions.HTTPException as exc:
+            msg = "Internal server error, message is %s" % exc
         except BaseException as exc: # pylint: disable=broad-except
             msg = "Unknown exception (type=%s, msg=%s) caught" % (type(exc), exc)
 
@@ -224,6 +220,11 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
             #
             try:
                 request = await self._queue.get()
+                #
+                # Invoke container handler and prepare response
+                #
+                response_bytes = await self._invoke_handler(request)
+                logger.debug("Writing %s", response_bytes.decode("utf-8"))
             except asyncio.exceptions.CancelledError:
                 #
                 # If the connection has been closed in the meantime (before we get scheduled again),
@@ -231,11 +232,6 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
                 # event loop marks the task as cancelled
                 #
                 raise asyncio.exceptions.CancelledError("Coroutine cancelled")
-            #
-            # Make response
-            #
-            response_bytes = await self._get_response(request)
-            logger.debug("Writing %s", response_bytes.decode("utf-8"))
             #
             # Deliver response
             #
