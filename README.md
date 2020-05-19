@@ -1,4 +1,4 @@
-# async-web-container
+# async-web-container ![Build status](https://api.travis-ci.org/christianb93/async-web-container.svg?branch=master)
 
 
 This repository contains a simple asynchronous web container using Pythons asyncio library. I wrote this to better understand the programming model behind the asyncio library, and this code is far from being ready for any production use, but still I decided to put this repository online as it might help other trying to understand asynchronous programming with Python.
