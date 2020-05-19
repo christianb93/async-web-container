@@ -10,12 +10,8 @@ install:
 
 
 #
-# Run linting
+# Run linting and unit tests
 #
 script:
   - pylint aioweb
-#
-# Run tests
-#
-script:
   - python -m pytest -v
