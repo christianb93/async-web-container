@@ -20,3 +20,27 @@ python3 -m pytest
 ```
 
 To run linting and tests, you can also use the included Makefile and do `make` or `make all`. 
+
+## Running and testing the sample server
+
+This repository contains a sample server which you can run to test the library by executing `python3 sample_server.py`. By default, the server uses the asyncio event loop, but can also be run using the alternative uvloop, simply add the switch *--uvloop* when starting the server.
+
+The reason why you might want to use an asynchronous server is that it is fast. To see how fast we can get, I have added a simple test client in Go which fires off a given number of requests per threads with a given number of threads (10). To create 100.000 requests, i.e. 10.000 requests per threads, simply run (assuming of course that you have a working Go environment)
+
+```
+go run client.go --threads=10 --requests=10000
+```
+
+On my PC, this took only a bit more than 4 seconds, so that we achieve a rate of more than 20.000 requests per second. The Python client which is also included is much slower, but, if run in several instances, is still able to make roughly 8000 - 10000 requests per second on the same machine.
+
+## Limitations
+
+The HTTP container in this repository is far from completed, and important features that a mature container would have are missing. Just to list a few of them:
+
+* compressed content is not supported
+* chunked transfer encoding is not supported
+* we only support HTTP 1.0 and HTTP 1.1
+* when using HTTP 1.0, keep-alive is not supported
+* a *aioweb.request.Requests* contains only a subset of what you might want to see, there is for instance no easy way to retriev method and URL (though this would be easy to add)
+* no HTTP conformance testing has been done
+
