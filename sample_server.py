@@ -14,12 +14,15 @@ import uvloop
 import aioweb.container
 import aioweb.protocol
 
+counter = 0
 
 async def handler(request, container):
     """
     This is the handler that will be executed for every request
     """
+    global counter
     body = await request.body()
+    counter += 1
     return body
 
 def handle_signal(container, signal, frame):
@@ -68,3 +71,5 @@ if args.uvloop:
 # Run event loop
 #
 asyncio.run(main())
+
+print("Served %d requests" % counter)
