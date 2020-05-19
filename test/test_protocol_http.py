@@ -52,10 +52,13 @@ class DummyContainer:
         self._request = None 
         self._handle_request_called = False
         self._exc = None
+        self._no_response = False
 
     async def handle_request(self, request):
         self._request = request
         self._handle_request_called = True 
+        if self._no_response:
+            return None
         if self._exc is not None:
             exc = self._exc
             self._exc = None
@@ -183,6 +186,33 @@ XYZ'''.replace(b'\n', b'\r\n')
     coro.send(None)
     assert container._request is not None
 
+#
+# Handler returns not a sequence of bytes
+#
+def test_handler_returntypemismatch(container, transport):
+    with unittest.mock.patch("asyncio.create_task") as mock:
+        protocol = aioweb.protocol.HttpProtocol(container=container, loop=unittest.mock.Mock())
+        protocol.connection_made(transport)
+        coro = mock.call_args.args[0]
+    #
+    # Ask the handler to return None
+    #
+    container._no_response = True
+    #
+    # Simulate data 
+    #
+    request = b'''GET / HTTP/1.1
+Host: example.com
+Content-Length: 3
+
+XYZ'''.replace(b'\n', b'\r\n')
+    protocol.data_received(request)
+    #
+    # We now have added a request object to the queue. Invoke the 
+    # worker loop which should proceed right into our handler 
+    #
+    coro.send(None)
+    assert container._request is not None
 
 
 #

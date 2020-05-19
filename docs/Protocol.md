@@ -20,7 +20,7 @@ In addition, the *data_received* handler is responsible for managing the timeout
 
 ## Timeouts
 
-To make sure that connections are closed if a client is idle for too long, we use a timeout handler. The timeouot is initially set when the connection is made and reset to its original value whenever data is received. When the timer expires, the current task is cancelled. This will raise a *asyncio.exceptions.CancelledError* in case the task is waiting for a future which needs to be caught and re-raised so that the event loop will not schedule the task again.
+To make sure that connections are closed if a client is idle for too long, we use a timeout handler. The timeouot is initially set when the connection is made and reset to its original value whenever data is received. When the timer expires, the current task is cancelled. This will raise a *asyncio.exceptions.CancelledError* in case the task is waiting for a future which needs to be caught and re-raised so that the event loop will not schedule the task again. The timeout handler also makes sure that the currently active connection is closed.
 
 ## The parser callbacks 
 
@@ -45,4 +45,4 @@ The following expected errors are handled during the processing:
 * all other error that occur while writing to the transport are ignored
 * if the handler raises an exception, a message with status code 500 is returned
 
-
+If a handler returns a bytearray instead of a sequence of bytes, this is silently converted. If any other type is returned, it is replaced by an empty string and an error message is logged.

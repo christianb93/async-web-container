@@ -197,6 +197,17 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
         else:
             status_code = 200
 
+        #
+        # If the result is not a sequence of bytes, replace it
+        # by an empty sequence unless it is a bytearray in which
+        # case we convert it
+        #
+        if isinstance(result, bytearray):
+            result = bytes(result)
+        if not isinstance(result, bytes):
+            logger.error("Result is not a sequence of bytes, replacing by empty string")
+            result = b""
+
         http_version = request.http_version()
 
         content_length = len(result)
