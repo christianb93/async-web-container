@@ -18,11 +18,14 @@ logger = logging.Logger(__name__)
 class ConnectionState(Enum):
     """
     This encodes the state of a connection.
+
+    Possible values are:
     CLOSED - closed
     HEADER - we have received a first part of the header
     BODY - we have received the complete header
     PENDING - waiting for the next message
     """
+
     CLOSED = 0              # Closed
     HEADER = 1              # We have received a first part of the header
     BODY = 2                # We have received the complete header
@@ -33,11 +36,19 @@ class ConnectionState(Enum):
 class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attributes
 
     """
-    A protocol used by our container class. When a connection is made, this protocol
-    creates a task which handles all requests processed through this connection and
-    is cancelled if the connection is closed. The task will then wait on a future
-    until the parser signals that a header is complete and then invoke the user
-    supplied handler.
+    A protocol used by our container class.
+
+    When a connection is made, this protocol creates a task which handles all requests
+    processed through this connection and is cancelled if the connection is closed. The task
+    will then wait on a future until the header of the request has been parsed. If this happens,
+    the future will be completed, using an aioweb.request.HTTPRequest object as the future result.
+
+    Then, the handler attached to the container is invoked. This handler can either decide
+    to wait for the request body or proceed. In any case, the handler is expected to return
+    a sequence of bytes which will then be used as the body of the response.
+
+    If the parser signals that a message is complete, the future embedded into the current
+    request will be completed using the request body as a result.
     """
 
     __slots__ = ['_loop', '_transport', '_future', '_container',
@@ -63,10 +74,13 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
 
     def connection_made(self, transport):
         """
+        Signal creation of a new connection.
+
         This callback is invoked by the transport when a connection is established. It
         creates a task which handles all future requests received via this connection
-        and schedules a timeout
+        and schedules a timeout. The state of the connection will be updated to PENDING
         """
+
         self._transport = transport
         logger.debug("Connection started, transport is %s", self._transport)
         #
@@ -89,9 +103,52 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
         """
         Return the current state of the connection
         """
+
         return self._state
 
-    async def _handle_requests(self): # pylint: disable=too-many-branches
+    #
+    # Helper method to invoke the container handler and create a response
+    #
+    async def _get_response(self, request: aioweb.request.HTTPToolsRequest) -> bytes:
+        assert isinstance(request, aioweb.request.HTTPToolsRequest)
+        #
+        # Asynchronously invoke container handler for this request
+        #
+        msg = None
+        try:
+            result = await self._container.handle_request(request)
+        except aioweb.exceptions.HTTPException:
+            msg = "Handler raised exception"
+        except asyncio.exceptions.CancelledError:
+            msg = "Task was cancelled, ignoring"
+        except asyncio.exceptions.TimeoutError:
+            msg = "Request timed out"
+        except BaseException as exc: # pylint: disable=broad-except
+            msg = "Unknown exception (type=%s, msg=%s) caught" % (type(exc), exc)
+
+        #
+        # If we got an exception, log it and replace result by error message
+        #
+        if msg is not None:
+            logger.error("Have message %s from previous error", msg)
+            result = bytes(msg, "utf-8")
+            status_code = 500
+        else:
+            status_code = 200
+
+        http_version = request.http_version()
+
+        content_length = len(result)
+        response_bytes = b''.join([
+            bytes("HTTP/%s %s OK\r\n" % (http_version, status_code), "utf-8"),
+            b'Content-Type: text/plain; charset=utf-8\r\n',
+            bytes("Content-Length: %d\r\n" % content_length, "utf-8"),
+            b'\r\n',
+            result
+            ])
+        return response_bytes
+
+    async def _handle_requests(self):
         #
         # This handler needs to remain open for the entire
         # duration of the connection
@@ -126,38 +183,9 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
             #
             self._future = asyncio.Future()
             #
-            # Asynchronously invoke container handler for this request
+            # Make response
             #
-            msg = None
-            try:
-                response = await self._container.handle_request(request)
-            except aioweb.exceptions.HTTPException:
-                msg = "Handler raised exception"
-            except asyncio.exceptions.CancelledError:
-                msg = "Task was cancelled, ignoring"
-            except asyncio.exceptions.TimeoutError:
-                msg = "Request timed out"
-            except BaseException as exc: # pylint: disable=broad-except
-                msg = "Unknown exception (type=%s, msg=%s) caught" % (type(exc), exc)
-
-            if msg is not None:
-                logger.error("Have message %s from previous error", msg)
-                response = bytes(msg, "utf-8")
-                status_code = 500
-            else:
-                status_code = 200
-
-            http_version = request.http_version()
-            keep_alive = request.keep_alive()
-
-            content_length = len(response)
-            response_bytes = b''.join([
-                bytes("HTTP/%s %s OK\r\n" % (http_version, status_code), "utf-8"),
-                b'Content-Type: text/plain; charset=utf-8\r\n',
-                bytes("Content-Length: %d\r\n" % content_length, "utf-8"),
-                b'\r\n',
-                response
-                ])
+            response_bytes = await self._get_response(request)
             logger.debug("Writing %s", response_bytes.decode("utf-8"))
             if self._transport.is_closing():
                 logger.error("Cannot write into closing transport")
@@ -167,7 +195,7 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
                 #
                 # Close transport if needed
                 #
-                if not keep_alive:
+                if not request.keep_alive():
                     self._transport.close()
             except BaseException as exc: # pylint: disable=broad-except
                 logger.error("Got unexpected error (type=%s, msg=%s", type(exc), exc)
@@ -195,11 +223,14 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
 
     def connection_lost(self, exc):
         """
+        Signal that a connection has been closed.
+
         This callback is invoked by the transport when the connection is lost. Exceptions
         passed will be ignored. The current task will be cancelled, and the state of the
         connection will be set to closed. Any pending timeout handlers will be cancelled as
         well.
         """
+
         if exc:
             #
             # Either the peer closed the connection, or a protocol callback raised
@@ -226,8 +257,13 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
 
     def data_received(self, data: bytes):
         """
-        This is called by the transport if new data arrives
+        Main entry point to hand over received data to the protocol.
+
+        This is called by the transport if new data arrives. If the state of the connection
+        is still pending, it will be set to HEADER. Then the data will be handed over to the
+        parser which potentially invokes further callbacks.
         """
+
         #
         # If we do not yet have a parser, create one
         #
@@ -255,8 +291,13 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
 
     def on_message_complete(self):
         """
-        This callback is invoked by the parser when the message is done.
+        Signal completion of a message.
+
+        This callback is invoked by the parser when the message is done. It resets the connection
+        state and completes the request future on which the main handler loop might be waiting,
+        adding the request body as the result of the future
         """
+
         #
         # Reset parser
         #
@@ -284,8 +325,12 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
 
     def on_header(self, key, value):
         """
-        Called by the parser when a header line is received, passing bytes
+        Signal a new HTTP request header.
+
+        Called by the parser when a header line is received, passing bytes. This method
+        simply adds the received header to an internal dictionary of detected headers
         """
+
         self._state = ConnectionState.HEADER
         if key is not None:
             key_str = key.decode("utf-8")
@@ -294,9 +339,12 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
 
     def on_body(self, data):
         """
+        Receive a part of a HTTP request body.
+
         This method is called by the parser when a piece of the body comes in
         We simply append the body part to the existing body data
         """
+
         if self._body is None:
             self._body = bytearray()
         self._body.extend(data)
@@ -304,16 +352,23 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
 
     def get_headers(self) -> dict:
         """
-        Return the currently collected headers as a dictionary. The keys are built assuming
+        Get all collected HTTP request headers.
+
+        This returns the currently collected headers as a dictionary. The keys are built assuming
         UTF-8 encoding
         """
+
         return self._headers
 
     def on_headers_complete(self):
         """
+        Signal completion of a HTTP request header.
+
         This is called by the parser when the headers are complete. Here we complete the future
-        on which the handler task is currently waiting
+        on which the handler task is currently waiting, using a HTTPRequest object as the result.
+        The state of the connection will be advanced to BODY.
         """
+
         logger.debug("Header complete")
         #
         # Build a request object and release handler task to

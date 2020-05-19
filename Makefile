@@ -1,5 +1,5 @@
 tests: lint
-	python3 -m pytest
+	python3 -m pytest -v
 
 lint:
 	pylint aioweb

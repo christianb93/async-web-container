@@ -285,7 +285,7 @@ X'''
     assert result is not None
     #
     # When we now call send on the coroutine to simulate that the event
-    # loop reschedules it, it should invoke our handler function
+    # loop reschedules it, it should invoke our handler function 
     #
     coro.send(None)
     #
@@ -304,7 +304,7 @@ X'''
     assert headers["Host"] == b"example.com"
     assert request.http_version() == "1.1"
     #
-    # Now try to wait for the body
+    # Get the future to wait for completion of the body
     #
     future = request.body().send(None)
     assert isinstance(future, asyncio.Future)
