@@ -6,8 +6,9 @@ processing flow of a request
 import asyncio
 import logging
 from enum import Enum
+from typing import Dict
 
-import httptools
+import httptools # type: ignore
 
 import aioweb.request
 import aioweb.container
@@ -66,10 +67,10 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
         self._timeout_handler = None
         self._parser = None
         self._state = ConnectionState.CLOSED
-        self._headers = {}
+        self._headers = {} # type: Dict[str, bytes]
         self._body_future = None
         self._body = None
-        self._queue = asyncio.Queue()
+        self._queue = asyncio.Queue() # type: asyncio.Queue
 
     def connection_made(self, transport):
         """
@@ -153,7 +154,7 @@ class HttpProtocol(asyncio.Protocol): # pylint: disable=too-many-instance-attrib
         # Feed data into parser, which might eventually trigger callbacks
         # or raise exceptions if the data is not valid
         #
-        self._parser.feed_data(data)
+        self._parser.feed_data(data) # type: ignore
         #
         # If we have a running timeout, reschedule it. This is not awfully
         # efficient, we could also let it expire and reschedule only then...

@@ -3,6 +3,7 @@ tests: lint
 
 lint:
 	pylint aioweb
+	mypy -p aioweb
 
 all: tests 
 
